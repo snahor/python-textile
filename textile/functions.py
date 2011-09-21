@@ -261,7 +261,7 @@ class Textile(object):
         True
 
         """
-        r = re.compile(r'<(p|blockquote|div|form|table|ul|ol|pre|h\d)[^>]*?>.*</\1>',
+        r = re.compile(r'<(p|blockquote|div|form|table|ul|ol|dl|pre|h|\d)[^>]*?>.*</\1>',
                        re.S).sub('', text.strip()).strip()
         r = re.compile(r'<(hr|br)[^>]*?/>').sub('', r)
         return '' != r
@@ -323,49 +323,55 @@ class Textile(object):
         >>> t.lists("* one\\n* two\\n* three")
         '\\t<ul>\\n\\t\\t<li>one</li>\\n\\t\\t<li>two</li>\\n\\t\\t<li>three</li>\\n\\t</ul>'
         """
-
-        #Replace line-initial bullets with asterisks
-        bullet_pattern = re.compile(u'^•', re.U | re.M)
-
-        pattern = re.compile(r'^([#*]+%s .*)$(?![^#*])'
+        pattern = re.compile(r'^([#*;:]+%s .*)$(?![^#*;:])'
                              % self.c, re.U | re.M | re.S)
-        return pattern.sub(self.fList, bullet_pattern.sub('*', text))
+        return pattern.sub(self.fList, text)
 
     def fList(self, match):
         text = match.group(0).split("\n")
         result = []
-        lists = []
+        lists = {}  # OrderedDict woud have been a better option
+        pt = ''
         for i, line in enumerate(text):
             try:
                 nextline = text[i + 1]
             except IndexError:
                 nextline = ''
 
-            m = re.search(r"^([#*]+)(%s%s) (.*)$" % (self.align_re,
+            m = re.search(r"^([#*;:]+)(%s%s) (.*)$" % (self.align_re,
                                                      self.c), line, re.S)
             if m:
                 tl, atts, content = m.groups()
                 nl = ''
-                nm = re.search(r'^([#*]+)\s.*', nextline)
+                nm = re.search(r'^([#*;:]+)\s.*', nextline)
                 if nm:
                     nl = nm.group(1)
+                item_type = self.list_item_type(tl)
+
+                if pt and pt[0] == ';' and tl and tl[0] == ':':
+                    lists.update({tl: {'flag': 2, 'order': i}})
+
                 if tl not in lists:
-                    lists.append(tl)
+                    lists.update({tl: {'flag': 1, 'order': i}})
                     atts = self.pba(atts)
-                    line = "\t<%sl%s>\n\t\t<li>%s" % (self.listType(tl),
-                                                      atts, self.graf(content))
+                    line = "\t<%sl%s>\n\t\t<%s>%s" % (self.listType(tl),
+                                                      atts,
+                                                      item_type,
+                                                      self.graf(content))
                 else:
-                    line = "\t\t<li>" + self.graf(content)
+                    line = "\t\t<%s>%s" % (item_type, self.graf(content))
 
                 if len(nl) <= len(tl):
-                    line = line + "</li>"
-                for k in reversed(lists):
-                    if len(k) > len(nl):
-                        line = line + "\n\t</%sl>" % self.listType(k)
-                        if len(k) > 1:
-                            line = line + "</li>"
-                        lists.remove(k)
+                    line = line + "</%s>" % item_type
 
+                for k in sorted(lists, key=lambda x: lists[x]['order'], reverse=True):
+                    flag = lists[k]['flag']
+                    if len(k) > len(nl):
+                        line += '' if flag == 2 else "\n\t</%sl>" % self.listType(k)
+                        if len(k) > 1 and flag != 2:
+                            line += "</%s>" % item_type
+                        lists.pop(k)
+                    pt = tl
             result.append(line)
         return "\n".join(result)
 
@@ -373,7 +379,18 @@ class Textile(object):
         if re.search(r'^#+', list_string):
             return 'o'
         else:
-            return 'u'
+            if re.search(r'^\*+', list_string):
+                return 'u'
+            else:
+                return 'd'
+
+    def list_item_type(self, s):
+        if s[0] == ';':
+            return 'dt'
+        elif s[0] == ':':
+            return 'dd'
+        else:
+            return 'li'
 
     def doPBr(self, in_):
         return re.compile(r'<(p)([^>]*?)>(.*)(</\1>)', re.S).sub(self.doBr,
